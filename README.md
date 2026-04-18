@@ -7,7 +7,7 @@ A professional cryptocurrency trading dashboard with real-time market data, port
 ## Features
 
 ### Core Dashboard Features
-- **Real-time Market Prices** - Live price updates for 5 major cryptocurrencies
+- **Real-time Market Prices** - Live price updates for 3 major cryptocurrencies
 - **Portfolio Management** - Track holdings with automatic valuation
 - **TradingView-style Charts** - Professional candlestick charts with volume
 - **Transaction History** - Add and track buy/sell transactions
