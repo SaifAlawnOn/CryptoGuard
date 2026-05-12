@@ -4,12 +4,16 @@
     <title>CryptoGuard</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- If the UI is hosted separately from the API (e.g. GitHub Pages), put your backend URL here: -->
+    <meta name="cryptoguard-api" content="">
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body>
+    <!-- CryptoGuard page layout: login/register screen first, then dashboard after login. -->
+    <!-- The frontend script app.js controls which screen is visible and loads data. -->
 
     <!-- Login / Register (shown before dashboard) -->
     <div id="auth-screen" class="auth-screen">
@@ -175,6 +179,16 @@
                         <p class="card-subtitle">Your latest trades</p>
                     </div>
                     <ul id="transactions" class="transactions-list"></ul>
+                </section>
+
+                <!-- Database View -->
+                <section class="card database-view-card">
+                    <div class="card-header">
+                        <h2>Database View</h2>
+                        <p class="card-subtitle">View stored users and transactions</p>
+                    </div>
+                    <button type="button" onclick="showDatabase()" class="btn-primary">Show Database</button>
+                    <div id="database-display" class="database-display"></div>
                 </section>
             </div>
         </main>

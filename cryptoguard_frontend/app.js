@@ -1,6 +1,25 @@
-// Simple login system - no network dependencies
+// CryptoGuard frontend application logic.
+// Manages user authentication, dashboard UI, transaction capture,
+// portfolio calculations, market price display, and offline support.
+// This file is the main client-side entry point for the demo dashboard.
 const TOKEN_KEY = "cryptoguard_token";
-const API = "http://127.0.0.1:5000";
+
+// API base: set window.CRYPTOGUARD_API_BASE, or <meta name="cryptoguard-api" content="https://..."> before this script.
+// When the UI is served by the same Flask app as the API, defaults to location.origin (works online).
+function getApiBaseUrl() {
+    if (typeof window === "undefined") return "http://127.0.0.1:5000";
+    const w = String(window.CRYPTOGUARD_API_BASE || "").trim();
+    if (w) return w.replace(/\/$/, "");
+    const meta = document.querySelector('meta[name="cryptoguard-api"]');
+    const m = meta && meta.getAttribute("content") ? meta.getAttribute("content").trim() : "";
+    if (m) return m.replace(/\/$/, "");
+    if (window.location.protocol === "file:") return "http://127.0.0.1:5000";
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+        return "http://127.0.0.1:5000";
+    }
+    return window.location.origin;
+}
+const API = getApiBaseUrl();
 const COIN_MAP = {
     'BTC': 'bitcoin',
     'ETH': 'ethereum', 
@@ -20,6 +39,48 @@ function getToken() {
 function setToken(t) {
     if (t) localStorage.setItem(TOKEN_KEY, t);
     else localStorage.removeItem(TOKEN_KEY);
+}
+
+function apiHeaders() {
+    const token = getToken();
+    const headers = {
+        'Content-Type': 'application/json'
+    };
+    if (token) {
+        headers['X-Auth-Token'] = token;
+    }
+    return headers;
+}
+
+async function fetchTransactions() {
+    try {
+        const response = await fetch(API + "/transactions", {
+            headers: apiHeaders()
+        });
+        if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data)) {
+                if (data.length > 0 && Array.isArray(data[0])) {
+                    return data.map((row) => ({
+                        id: row[0],
+                        user_id: row[1],
+                        coin: row[2],
+                        amount: row[3],
+                        type: row[4],
+                        date: row[5]
+                    }));
+                }
+                return data;
+            }
+        } else {
+            console.warn('Transaction API returned status', response.status);
+        }
+    } catch (error) {
+        console.warn('Transaction API failed, falling back to offline storage:', error);
+    }
+
+    const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
+    return Array.isArray(offlineTransactions) ? offlineTransactions : [];
 }
 
 function showAuth() {
@@ -74,165 +135,53 @@ function showDashboard(username) {
     });
 }
 
-function checkSession() {
-    const currentUser = localStorage.getItem('currentUser');
-    if (currentUser) {
-        // User is logged in, show dashboard
-        document.getElementById("auth-screen").classList.add("hidden");
-        document.getElementById("dashboard-screen").classList.remove("hidden");
-        document.getElementById("welcome-username").textContent = currentUser;
-        
-        // Load dashboard data
-        setTimeout(() => {
-            loadTransactions();
-            loadPortfolio();
-            loadMarketPrices();
-            updateTotalPortfolioValue();
-        }, 100);
-    } else {
-        // Show login screen
+// Restore session only if the backend still recognizes the token.
+async function checkSession() {
+    const token = getToken();
+    const storedName = localStorage.getItem("currentUser");
+    if (!token) {
+        if (storedName) localStorage.removeItem("currentUser");
         showAuth();
-    }
-}
-
-async function doRegister() {
-    const errEl = document.getElementById("register-error");
-    errEl.textContent = "";
-    errEl.style.color = "";
-    const username = document.getElementById("reg-username").value.trim();
-    const email = document.getElementById("reg-email").value.trim();
-    const password = document.getElementById("reg-password").value;
-    if (!username || !email || !password) {
-        errEl.textContent = "Please choose a username, enter an email, and create a password.";
         return;
     }
-    if (username.length < 2) {
-        errEl.textContent = "Username must be at least 2 characters.";
-        return;
-    }
-    if (email.length < 1 || !email.includes("@")) {
-        errEl.textContent = "Please enter a valid email address.";
-        return;
-    }
-    if (password.length < 6) {
-        errEl.textContent = "Password must be at least 6 characters.";
-        return;
-    }
-
-    // Complete offline registration - no network dependencies
-    console.log('Registering offline:', username);
-    
-    // Store offline user info
-    localStorage.setItem('offlineUser', JSON.stringify({
-        username,
-        email,
-        registerTime: new Date().toISOString(),
-        sessionActive: false // Will be activated on login
-    }));
-    
-    // Show success message
-    errEl.textContent = "Account created successfully! Log in below.";
-    errEl.style.color = "#10b981";
-    
-    // Auto-fill login form
-    document.getElementById("login-username").value = username;
-    document.getElementById("login-password").value = "";
-    document.getElementById("login-password").focus();
-    
-    console.log('Offline registration successful for:', username);
-}
-
-function testLogin() {
-    console.log('=== TEST LOGIN STARTED ===');
-    
-    // Direct login without form validation
-    const username = 'TestUser';
-    localStorage.setItem('currentUser', username);
-    setToken('test-' + Date.now());
-    
-    // Show dashboard immediately
-    const authScreen = document.getElementById("auth-screen");
-    const dashboardScreen = document.getElementById("dashboard-screen");
-    const welcomeEl = document.getElementById("welcome-username");
-    
-    console.log('Elements found:', {
-        authScreen: !!authScreen,
-        dashboardScreen: !!dashboardScreen,
-        welcomeEl: !!welcomeEl
-    });
-    
-    if (authScreen) authScreen.classList.add("hidden");
-    if (dashboardScreen) dashboardScreen.classList.remove("hidden");
-    if (welcomeEl) welcomeEl.textContent = username;
-    
-    console.log('TEST LOGIN SUCCESS - Dashboard shown for:', username);
-    
-    // Initialize dashboard immediately
-    console.log('About to call initDashboard...');
-    initDashboard().then(() => {
-        console.log('initDashboard completed successfully');
-    }).catch(error => {
-        console.error('initDashboard failed:', error);
-    });
-}
-
-function doLogin() {
     try {
-        const username = document.getElementById("login-username").value.trim();
-        const password = document.getElementById("login-password").value;
-        const errEl = document.getElementById("login-error");
-        
-        if (!username || !password) {
-            errEl.textContent = "Please enter username and password.";
+        const r = await fetch(API + "/me", { headers: apiHeaders() });
+        const data = await r.json().catch(() => ({}));
+        if (data.logged_in && data.username) {
+            localStorage.setItem("currentUser", data.username);
+            showDashboard(data.username);
             return;
         }
-
-        console.log('Login attempt for:', username);
-
-        // Instant login - no network, no delays
-        localStorage.setItem('currentUser', username);
-        setToken('offline-' + Date.now());
-        
-        // Show dashboard immediately
-        const authScreen = document.getElementById("auth-screen");
-        const dashboardScreen = document.getElementById("dashboard-screen");
-        const welcomeEl = document.getElementById("welcome-username");
-        
-        if (authScreen) authScreen.classList.add("hidden");
-        if (dashboardScreen) dashboardScreen.classList.remove("hidden");
-        if (welcomeEl) welcomeEl.textContent = username;
-        
-        console.log('Dashboard shown for:', username);
-        
-        // Initialize dashboard with APIs
-        setTimeout(() => {
-            initDashboard();
-        }, 100);
-        
-    } catch (error) {
-        console.error('Login error:', error);
-        const errEl = document.getElementById("login-error");
-        if (errEl) errEl.textContent = "Login failed. Please try again.";
+    } catch (e) {
+        console.warn("Session check failed:", e);
     }
+    localStorage.removeItem("currentUser");
+    setToken("");
+    showAuth();
 }
 
 function doLogout() {
-    // Instant logout
-    localStorage.removeItem('currentUser');
-    localStorage.removeItem('offlineTransactions');
-    setToken('');
-    
-    // Clear chart if exists
+    const token = getToken();
+    if (token) {
+        fetch(API + "/logout", {
+            method: "POST",
+            headers: apiHeaders(),
+        }).catch(() => {});
+    }
+    localStorage.removeItem("currentUser");
+    localStorage.removeItem("offlineTransactions");
+    setToken("");
+
     if (pieChartInstance) {
         pieChartInstance.destroy();
         pieChartInstance = null;
     }
-    
-    // Show login screen
-    document.getElementById("dashboard-screen").classList.add("hidden");
-    document.getElementById("auth-screen").classList.remove("hidden");
+
+    showAuth();
 }
 
+// Initialize the dashboard after login by loading portfolio, market data,
+// transactions, and charts. This function ties together the main UI updates.
 function initDashboardData() {
     console.log('=== INITIALIZING DASHBOARD DATA ===');
     
@@ -319,17 +268,6 @@ async function testBasicFunctionality() {
         total: !!totalEl
     });
     
-    // Test setting some dummy data
-    if (holdingsEl) {
-        holdingsEl.textContent = "Test: BTC: 1.0 ($70,000)";
-        console.log('Test data set to holdings element');
-    }
-    
-    if (totalEl) {
-        totalEl.textContent = "$70,000.00";
-        console.log('Test data set to total element');
-    }
-    
     console.log('=== TEST COMPLETE ===');
 }
 
@@ -358,7 +296,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const dashboardScreen = document.getElementById("dashboard-screen");
     const authScreen = document.getElementById("auth-screen");
     
-    if (dashboardScreen.classList.contains("hidden")) {
+    if (dashboardScreen?.classList.contains("hidden")) {
         checkSession();
     }
     
@@ -446,12 +384,9 @@ async function addTransaction() {
         // Try API first
         console.log('Adding transaction via API:', newTransaction);
         
-        const response = await fetch('http://127.0.0.1:5000/api/transactions', {
+        const response = await fetch(API + '/add_transaction', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${getToken()}` // Add token to headers
-            },
+            headers: apiHeaders(),
             body: JSON.stringify(newTransaction),
             timeout: 5000
         });
@@ -492,37 +427,22 @@ async function addTransaction() {
 }
 
 // Calculate current portfolio from transactions (API + localStorage)
+// Build the user's current portfolio balances from transactions.
+// This is used for sell validation and summary display.
 async function calculateCurrentPortfolio() {
     const portfolio = {};
-    
-    try {
-        // Try API first
-        const response = await fetch('http://127.0.0.1:5000/api/transactions', {
-            headers: {
-                'Authorization': `Bearer ${getToken()}` // Add token to headers
-            },
-            timeout: 5000
-        });
-        
-        if (response.ok) {
-            const transactions = await response.json();
-            transactions.forEach((t) => {
-                if (!portfolio[t.coin]) portfolio[t.coin] = 0;
-                portfolio[t.coin] += t.type === "buy" ? t.amount : -t.amount;
-            });
-            return portfolio;
-        }
-    } catch (error) {
-        console.log('API failed for portfolio calculation, using localStorage');
-    }
-    
-    // Fallback to localStorage
-    const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
-    offlineTransactions.forEach((t) => {
-        if (!portfolio[t.coin]) portfolio[t.coin] = 0;
-        portfolio[t.coin] += t.type === "buy" ? t.amount : -t.amount;
+    const transactions = await fetchTransactions();
+
+    transactions.forEach((t) => {
+        if (!t || !t.coin) return;
+        const coin = t.coin;
+        const amount = parseFloat(t.amount) || 0;
+        const txType = t.type;
+
+        if (!portfolio[coin]) portfolio[coin] = 0;
+        portfolio[coin] += txType === "buy" ? amount : -amount;
     });
-    
+
     return portfolio;
 }
 
@@ -533,7 +453,8 @@ async function refreshDashboardData() {
             loadTransactions(),
             loadPortfolio(),
             updatePieChart(),
-            loadMarketPrices()
+            loadMarketPrices(),
+            updateTotalPortfolioValue()
         ]);
         console.log('Dashboard data refreshed');
     } catch (error) {
@@ -551,10 +472,8 @@ async function loadTransactions() {
     try {
         // Try API first
         console.log('Loading transactions from API...');
-        const response = await fetch('http://127.0.0.1:5000/api/transactions', {
-            headers: {
-                'Authorization': `Bearer ${getToken()}`
-            },
+        const response = await fetch(API + '/transactions', {
+            headers: apiHeaders(),
             timeout: 5000
         });
         
@@ -622,21 +541,25 @@ async function loadTransactions() {
     console.log('Transactions displayed');
 }
 
-/* Load Portfolio from offline transactions */
+/* Load Portfolio from backend transactions with offline fallback */
 async function loadPortfolio() {
-    const holdingsEl = document.getElementById("holdings");
-    const totalEl = document.getElementById("total-portfolio-value");
-    const changeEl = document.getElementById("portfolio-change");
+    const holdingsEl = document.getElementById("portfolio-holdings");
+    const totalEl = document.getElementById("wp-total");
+    const changeEl = document.getElementById("wp-change");
     
     try {
-        // Get transactions from offline storage
-        const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
+        const transactions = await fetchTransactions();
         
         // Calculate portfolio
         const portfolio = {};
-        offlineTransactions.forEach((t) => {
-            if (!portfolio[t.coin]) portfolio[t.coin] = 0;
-            portfolio[t.coin] += t.type === "buy" ? t.amount : -t.amount;
+        transactions.forEach((t) => {
+            if (!t || !t.coin) return;
+            const coin = t.coin;
+            const amount = parseFloat(t.amount) || 0;
+            const txType = t.type;
+
+            if (!portfolio[coin]) portfolio[coin] = 0;
+            portfolio[coin] += txType === "buy" ? amount : -amount;
         });
         
         // Get current prices with fallback
@@ -652,6 +575,16 @@ async function loadPortfolio() {
             }
         } catch (error) {
             console.log('Using fallback prices for portfolio');
+        }
+
+        if (!priceData || Object.keys(priceData).length === 0) {
+            priceData = {
+                'bitcoin': { usd: 71500, usd_24h_change: 4.5 },
+                'ethereum': { usd: 3800, usd_24h_change: 2.1 },
+                'cardano': { usd: 0.65, usd_24h_change: -1.2 },
+                'solana': { usd: 180, usd_24h_change: 8.3 },
+                'binancecoin': { usd: 620, usd_24h_change: 1.8 }
+            };
         }
         
         // Calculate portfolio value
@@ -704,7 +637,7 @@ async function loadPortfolio() {
                 else if (portfolio24hPct < 0) changeEl.classList.add("negative");
                 else changeEl.classList.add("neutral");
             } else {
-                changeEl.textContent = "â";
+                changeEl.textContent = "—";
                 changeEl.classList.add("neutral");
             }
         }
@@ -825,266 +758,72 @@ function displayMarketPrices(data) {
     container.innerHTML = html || '<div class="price-item">No market data available</div>';
 }
 
-/* Transaction Management */
-async function addTransaction() {
-    const errEl = document.getElementById("tx-form-error");
-    errEl.textContent = "";
-    
-    // Get form values at the beginning
-    const coin = document.getElementById("coin").value;
-    const amountRaw = document.getElementById("amount").value;
-    const type = document.getElementById("type").value;
-    const date = document.getElementById("date").value;
-    const amount = parseFloat(amountRaw);
-
-    // Input validation
-    if (!coin || !type || !date) {
-        errEl.textContent = "Please fill in all fields.";
-        return;
-    }
-
-    if (amountRaw === "" || amountRaw === null || Number.isNaN(Number(amountRaw))) {
-        errEl.textContent = "Please enter a valid amount.";
-        return;
-    }
-    
-    if (amount <= 0) {
-        errEl.textContent = "Please enter a positive amount.";
-        return;
-    }
-
-    // Work completely offline - no network calls
-    console.log('Adding transaction offline:', { coin, amount, type, date });
-    
-    // Store transaction in localStorage for persistence
-    const transactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
-    const newTransaction = {
-        id: Date.now(),
-        coin,
-        amount: parseFloat(amount),
-        type,
-        date,
-        timestamp: new Date().toISOString()
-    };
-    transactions.unshift(newTransaction); // Add to beginning
-    
-    // Keep only latest 10 transactions
-    if (transactions.length > 10) {
-        transactions.splice(10);
-    }
-    
-    localStorage.setItem('offlineTransactions', JSON.stringify(transactions));
-    console.log('Transaction saved offline:', newTransaction);
-    
-    // Clear form
-    document.getElementById("coin").value = "";
-    document.getElementById("amount").value = "";
-    document.getElementById("date").value = "";
-    
-    // Update UI immediately
-    loadTransactions();
-    loadPortfolio();
-    
-    errEl.textContent = "Transaction added successfully!";
-    errEl.style.color = "#10b981";
-}
-
-/* Load Transactions */
-async function loadTransactions() {
-    const list = document.getElementById("transactions");
-    if (!list) return;
-    
-    try {
-        // Use offline storage for transactions
-        const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
-        
-        console.log('Loading transactions from offline storage:', offlineTransactions.length);
-        
-        list.innerHTML = "";
-        
-        // Display only latest 10 transactions
-        offlineTransactions.slice(0, 10).forEach((t) => {
-            const item = document.createElement("li");
-            const typeClass = t.type === 'buy' ? 'transaction-buy' : 'transaction-sell';
-            const typeSymbol = t.type === 'buy' ? '+' : '-';
-            
-            item.innerHTML = `
-                <div class="transaction-item ${typeClass}">
-                    <div class="transaction-header">
-                        <span class="transaction-coin">${t.coin}</span>
-                        <span class="transaction-type">${t.type.toUpperCase()}</span>
-                        <span class="transaction-date">${t.date}</span>
-                    </div>
-                    <div class="transaction-details">
-                        <span class="transaction-amount">${typeSymbol}${t.amount}</span>
-                    </div>
-                </div>
-            `;
-            list.appendChild(item);
-        });
-        
-        console.log('Loaded latest 10 transactions from offline storage');
-        
-    } catch (error) {
-        console.error('Error loading transactions:', error);
-        list.innerHTML = '<li>Error loading transactions</li>';
-    }
-}
-
-/* Load Portfolio */
-async function loadPortfolio() {
-    const holdingsEl = document.getElementById("portfolio-holdings");
-    const totalEl = document.getElementById("wp-total");
-    const changeEl = document.getElementById("wp-change");
-    
-    try {
-        // Get transactions from offline storage
-        const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
-        
-        // Calculate portfolio
-        const portfolio = {};
-        offlineTransactions.forEach((t) => {
-            if (!portfolio[t.coin]) portfolio[t.coin] = 0;
-            portfolio[t.coin] += t.type === "buy" ? t.amount : -t.amount;
-        });
-        
-        // Calculate portfolio value with fallback prices
-        const fallbackPrices = {
-            'bitcoin': { usd: 71500, usd_24h_change: 4.5 },
-            'ethereum': { usd: 3800, usd_24h_change: 2.1 },
-            'cardano': { usd: 0.65, usd_24h_change: -1.2 },
-            'solana': { usd: 180, usd_24h_change: 8.3 },
-            'binancecoin': { usd: 620, usd_24h_change: 1.8 }
-        };
-        
-        let totalUSD = 0;
-        let weightedChangeSum = 0;
-        const holdingsLines = [];
-        
-        for (const coin in portfolio) {
-            if (portfolio[coin] === 0) continue;
-            
-            const coinId = COIN_MAP[coin];
-            if (!coinId) continue;
-            
-            const coinAmount = portfolio[coin];
-            const coinPriceInfo = fallbackPrices[coinId];
-            
-            if (coinPriceInfo) {
-                const currentPrice = coinPriceInfo.usd;
-                const change24h = coinPriceInfo.usd_24h_change || 0;
-                const usdValue = amount * currentPrice;
-                
-                totalUSD += usdValue;
-                weightedChangeSum += usdValue * change24h;
-                
-                holdingsLines.push(`${coin}: ${amount.toFixed(6)} ($${usdValue.toLocaleString()})`);
-            }
-        }
-        
-        // Update holdings display with fallback values
-        if (holdingsEl) {
-            holdingsEl.textContent = holdingsLines.length ? holdingsLines.join('\n') : "No holdings yet.";
-        }
-        
-        // Update total value
-        if (totalEl) {
-            totalEl.textContent = `$${totalUSD.toLocaleString('en-US', { 
-                minimumFractionDigits: 2, 
-                maximumFractionDigits: 2 
-            })}`;
-        }
-        
-        // Update 24h change
-        if (changeEl) {
-            changeEl.classList.remove("positive", "negative", "neutral");
-            if (totalUSD > 0) {
-                const portfolio24hPct = weightedChangeSum / totalUSD;
-                const sign = portfolio24hPct >= 0 ? "+" : "";
-                changeEl.textContent = `${sign}${portfolio24hPct.toFixed(2)}%`;
-                if (portfolio24hPct > 0) changeEl.classList.add("positive");
-                else if (portfolio24hPct < 0) changeEl.classList.add("negative");
-                else changeEl.classList.add("neutral");
-            } else {
-                changeEl.textContent = "â";
-                changeEl.classList.add("neutral");
-            }
-        }
-        
-        console.log(' Portfolio value updated with fallback prices:', totalUSD);
-        
-    } catch (error) {
-        console.error('Error loading portfolio:', error);
-    }
-}
-
 /* Login Functions */
 function testLogin() {
-    console.log('TEST LOGIN - Bypassing form validation');
-    
-    // Direct login without form validation
-    const username = 'TestUser';
-    localStorage.setItem('currentUser', username);
-    setToken('test-' + Date.now());
-    
-    // Show dashboard immediately
-    const authScreen = document.getElementById("auth-screen");
-    const dashboardScreen = document.getElementById("dashboard-screen");
-    const welcomeEl = document.getElementById("welcome-username");
-    
-    if (authScreen) authScreen.classList.add("hidden");
-    if (dashboardScreen) dashboardScreen.classList.remove("hidden");
-    if (welcomeEl) welcomeEl.textContent = username;
-    
-    console.log('TEST LOGIN SUCCESS - Dashboard shown for:', username);
-    
-    // Initialize dashboard with APIs
-    setTimeout(() => {
-        initDashboard();
-    }, 100);
+    const errEl = document.getElementById("login-error");
+    if (errEl) errEl.textContent = "";
+
+    fetch(API + "/guest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+    })
+        .then(async (response) => {
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result.ok) {
+                throw new Error(result.error || "Could not start guest session.");
+            }
+            localStorage.setItem("currentUser", result.username || "Guest");
+            setToken(result.token);
+            showDashboard(result.username || "Guest");
+        })
+        .catch((error) => {
+            console.error("Guest login:", error);
+            if (errEl) {
+                errEl.textContent =
+                    "Guest mode needs the API at " +
+                    API +
+                    ". Start the Flask backend, then try again.";
+            }
+        });
 }
 
 function doLogin() {
-    try {
-        const username = document.getElementById("login-username").value.trim();
-        const password = document.getElementById("login-password").value;
-        const errEl = document.getElementById("login-error");
-        
-        if (!username || !password) {
-            errEl.textContent = "Please enter username and password.";
-            return;
-        }
-
-        console.log('Login attempt for:', username);
-
-        // Instant login - no network, no delays
-        localStorage.setItem('currentUser', username);
-        setToken('offline-' + Date.now());
-        
-        // Show dashboard immediately
-        const authScreen = document.getElementById("auth-screen");
-        const dashboardScreen = document.getElementById("dashboard-screen");
-        const welcomeEl = document.getElementById("welcome-username");
-        
-        if (authScreen) authScreen.classList.add("hidden");
-        if (dashboardScreen) dashboardScreen.classList.remove("hidden");
-        if (welcomeEl) welcomeEl.textContent = username;
-        
-        console.log('Dashboard shown for:', username);
-        
-        // Initialize dashboard
-        setTimeout(() => {
-            loadTransactions();
-            loadPortfolio();
-            loadMarketPrices();
-            updateTotalPortfolioValue();
-        }, 100);
-        
-    } catch (error) {
-        console.error('Login error:', error);
-        const errEl = document.getElementById("login-error");
-        if (errEl) errEl.textContent = "Login failed. Please try again.";
+    const username = document.getElementById("login-username").value.trim();
+    const password = document.getElementById("login-password").value;
+    const errEl = document.getElementById("login-error");
+    
+    if (!username || !password) {
+        errEl.textContent = "Please enter username and password.";
+        return;
     }
+
+    console.log('Login attempt for:', username);
+
+    fetch(API + "/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+    })
+        .then(async (response) => {
+            const result = await response.json().catch(() => ({}));
+            if (response.ok && result.ok && result.token) {
+                localStorage.setItem("currentUser", username);
+                setToken(result.token);
+                showDashboard(username);
+                return;
+            }
+            errEl.textContent =
+                result.error ||
+                (response.status === 0
+                    ? "Cannot reach API. Start the backend at " + API
+                    : "Login failed.");
+        })
+        .catch((error) => {
+            console.error("Login error:", error);
+            errEl.textContent =
+                "Network error — is the backend running at " + API + "?";
+        });
 }
 
 function doRegister() {
@@ -1111,27 +850,46 @@ function doRegister() {
         return;
     }
 
-    // Complete offline registration - no network dependencies
-    console.log('Registering offline:', username);
-    
-    // Store offline user info
-    localStorage.setItem('offlineUser', JSON.stringify({
-        username,
-        email,
-        registerTime: new Date().toISOString(),
-        sessionActive: false // Will be activated on login
-    }));
-    
-    // Show success message
-    errEl.textContent = "Account created successfully! Log in below.";
-    errEl.style.color = "#10b981";
-    
-    // Auto-fill login form
-    document.getElementById("login-username").value = username;
-    document.getElementById("login-password").value = "";
-    document.getElementById("login-password").focus();
-    
-    console.log('Offline registration successful for:', username);
+    fetch(API + "/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, email, password }),
+    })
+        .then(async (response) => {
+            const result = await response.json().catch(() => ({}));
+            if (response.ok && result.ok) {
+                const loginRes = await fetch(API + "/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password }),
+                });
+                const loginJson = await loginRes.json().catch(() => ({}));
+                if (loginRes.ok && loginJson.ok && loginJson.token) {
+                    errEl.textContent = "";
+                    errEl.style.color = "";
+                    localStorage.setItem("currentUser", username);
+                    setToken(loginJson.token);
+                    showDashboard(username);
+                    return;
+                }
+                errEl.textContent = "Account created. Please log in below.";
+                errEl.style.color = "#10b981";
+                document.getElementById("login-username").value = username;
+                document.getElementById("login-password").value = "";
+                document.getElementById("login-password").focus();
+                return;
+            }
+            errEl.textContent =
+                result.error ||
+                (response.status === 0
+                    ? "Cannot reach API. Start the backend at " + API
+                    : "Registration failed.");
+        })
+        .catch((error) => {
+            console.error("Registration error:", error);
+            errEl.textContent =
+                "Network error — is the backend running at " + API + "?";
+        });
 }
 
 /* Complete Offline Dashboard Functions */
@@ -1548,46 +1306,6 @@ function loadOfflineTransactions() {
     console.log('Offline transactions loaded');
 }
 
-async function loadPortfolio() {
-    const holdingsEl = document.getElementById("portfolio-holdings");
-    const totalEl = document.getElementById("wp-total");
-    const changeEl = document.getElementById("wp-change");
-    
-    if (!holdingsEl || !totalEl || !changeEl) {
-        console.error('Portfolio elements not found');
-        return;
-    }
-
-    // ALWAYS show something immediately
-    holdingsEl.textContent = "No holdings yet. Add your first transaction!";
-    totalEl.textContent = "$0.00";
-    changeEl.textContent = "-";
-    changeEl.className = "stat-change neutral";
-
-    const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
-    
-    // Calculate portfolio from localStorage
-    const portfolio = {};
-    offlineTransactions.forEach((t) => {
-        if (!portfolio[t.coin]) portfolio[t.coin] = 0;
-        portfolio[t.coin] += t.type === "buy" ? t.amount : -t.amount;
-    });
-    
-    // Use cached market data or fallback
-    let marketPrices = window.currentMarketData || {
-        'bitcoin': { usd: 71500, usd_24h_change: 4.5 },
-        'ethereum': { usd: 3800, usd_24h_change: 2.1 },
-        'cardano': { usd: 0.65, usd_24h_change: -1.2 },
-        'solana': { usd: 180, usd_24h_change: 8.3 },
-        'binancecoin': { usd: 620, usd_24h_change: 1.8 }
-    };
-    
-    // Update portfolio with prices
-    await updatePortfolioWithPrices(marketPrices);
-    
-    console.log('Portfolio loaded and displayed');
-}
-
 // Dynamic: Update portfolio with new price data
 async function updatePortfolioWithPrices(prices) {
     const holdingsEl = document.getElementById("portfolio-holdings");
@@ -1596,13 +1314,18 @@ async function updatePortfolioWithPrices(prices) {
     
     if (!holdingsEl || !totalEl || !changeEl) return;
     
-    const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
+    const transactions = await fetchTransactions();
     
-    // Calculate portfolio from localStorage
+    // Calculate portfolio from transactions
     const portfolio = {};
-    offlineTransactions.forEach((t) => {
-        if (!portfolio[t.coin]) portfolio[t.coin] = 0;
-        portfolio[t.coin] += t.type === "buy" ? t.amount : -t.amount;
+    transactions.forEach((t) => {
+        if (!t || !t.coin) return;
+        const coin = t.coin;
+        const amount = parseFloat(t.amount) || 0;
+        const txType = t.type;
+
+        if (!portfolio[coin]) portfolio[coin] = 0;
+        portfolio[coin] += txType === "buy" ? amount : -amount;
     });
     
     let totalUSD = 0;
@@ -1629,6 +1352,11 @@ async function updatePortfolioWithPrices(prices) {
         }
     }
     
+    // Store current prices for the rest of the dashboard
+    if (prices && typeof prices === 'object' && Object.keys(prices).length > 0) {
+        marketPricesData = prices;
+    }
+
     // Update UI with animation
     if (holdingsEl) holdingsEl.textContent = holdingsLines.length ? holdingsLines.join('\n') : "No holdings yet.";
     if (totalEl) totalEl.textContent = `$${totalUSD.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1687,13 +1415,18 @@ async function updatePieChart() {
     ctx.textAlign = 'center';
     ctx.fillText('No holdings yet', canvas.width / 2, canvas.height / 2);
     
-    const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
+    const transactions = await fetchTransactions();
     
-    // Calculate portfolio from localStorage
+    // Calculate portfolio from transactions
     const portfolio = {};
-    offlineTransactions.forEach((t) => {
-        if (!portfolio[t.coin]) portfolio[t.coin] = 0;
-        portfolio[t.coin] += t.type === "buy" ? t.amount : -t.amount;
+    transactions.forEach((t) => {
+        if (!t || !t.coin) return;
+        const coin = t.coin;
+        const amount = parseFloat(t.amount) || 0;
+        const txType = t.type;
+
+        if (!portfolio[coin]) portfolio[coin] = 0;
+        portfolio[coin] += txType === "buy" ? amount : -amount;
     });
     
     // Use cached market data or fallback
@@ -2243,6 +1976,8 @@ function createMarketChart(chartContainer, priceData, selectedCoin) {
 }
 
 /* Initialize Dashboard */
+// This second DOMContentLoaded listener is also used to bootstrap the app state.
+// It checks the session and sets the default transaction date when the page loads.
 document.addEventListener("DOMContentLoaded", () => {
     console.log('CryptoGuard Dashboard Loading...');
     
@@ -2476,6 +2211,83 @@ async function loadMarketPrices() {
         'binancecoin': { usd: 620, usd_24h_change: 1.8 }
     };
     
+    marketPricesData = fallbackData;
+    displayMarketPrices(fallbackData);
+    return fallbackData;
+}
+    const pricesContainer = document.getElementById("market-prices");
+    if (!pricesContainer) return;
+
+    // Try CoinGecko first
+    try {
+        const coinIds = Object.values(COIN_MAP).join(',');
+        const response = await fetch(
+            `https://api.coingecko.com/api/v3/simple/price?ids=${coinIds}&vs_currencies=usd&include_24hr_change=true`,
+            { 
+                headers: { 'Accept': 'application/json' },
+                timeout: 10000 
+            }
+        );
+        
+        if (response.ok) {
+            const data = await response.json();
+            marketPricesData = data;
+            displayMarketPrices(data);
+            return;
+        }
+    } catch (error) {
+        console.log('CoinGecko failed, trying alternative API:', error.message);
+    }
+
+    // Fallback to CoinCap API
+    try {
+        console.log('Trying CoinCap API as backup...');
+        const coinSymbols = Object.keys(COIN_MAP);
+        const promises = coinSymbols.map(async (symbol) => {
+            try {
+                const response = await fetch(`https://api.coincap.io/v2/assets/${symbol.toLowerCase()}`, {
+                    headers: { 'Accept': 'application/json' },
+                    timeout: 5000
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    const coinId = COIN_MAP[symbol];
+                    return {
+                        [coinId]: {
+                            usd: parseFloat(data.data.priceUsd),
+                            usd_24h_change: parseFloat(data.data.changePercent24Hr)
+                        }
+                    };
+                }
+            } catch (e) {
+                console.log(`CoinCap failed for ${symbol}:`, e.message);
+            }
+            return null;
+        });
+
+        const results = await Promise.all(promises);
+        const coinCapData = results.filter(Boolean).reduce((acc, curr) => ({ ...acc, ...curr }), {});
+        
+        if (Object.keys(coinCapData).length > 0) {
+            marketPricesData = coinCapData;
+            displayMarketPrices(coinCapData);
+            console.log('Using CoinCap API data');
+            return;
+        }
+    } catch (error) {
+        console.log('CoinCap also failed:', error.message);
+    }
+
+    // Final fallback with realistic data
+    console.log('Using static fallback data');
+    const fallbackData = {
+        'bitcoin': { usd: 71500, usd_24h_change: 4.5 },
+        'ethereum': { usd: 3800, usd_24h_change: 2.1 },
+        'cardano': { usd: 0.65, usd_24h_change: -1.2 },
+        'solana': { usd: 180, usd_24h_change: 8.3 },
+        'binancecoin': { usd: 620, usd_24h_change: 1.8 }
+    };
+    
     displayMarketPrices(fallbackData);
 }
 
@@ -2607,6 +2419,10 @@ async function loadTransactionHistory() {
 
     try {
         const response = await fetch(API + "/transactions", { headers: apiHeaders() });
+        if (!response.ok) {
+            throw new Error(`API error ${response.status}`);
+        }
+
         const transactions = await response.json();
         
         if (!Array.isArray(transactions)) {
@@ -2621,8 +2437,8 @@ async function loadTransactionHistory() {
 
         // Sort by date (newest first)
         transactions.sort((a, b) => {
-            const dateA = new Date(a[4]);
-            const dateB = new Date(b[4]);
+            const dateA = new Date(a.date);
+            const dateB = new Date(b.date);
             return dateB - dateA;
         });
 
@@ -2630,15 +2446,26 @@ async function loadTransactionHistory() {
         transactions.forEach((t) => {
             const item = document.createElement("li");
             item.textContent =
-                "Coin: " + t[1] +
-                " | Amount: " + t[2] +
-                " | Type: " + t[3] +
-                " | Date: " + t[4];
+                "Coin: " + t.coin +
+                " | Amount: " + t.amount +
+                " | Type: " + t.type +
+                " | Date: " + t.date;
             tbody.appendChild(item);
         });
     } catch (error) {
         console.error('Error loading transaction history:', error);
         
+        const offlineTransactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
+        if (Array.isArray(offlineTransactions) && offlineTransactions.length > 0) {
+            tbody.innerHTML = '';
+            offlineTransactions.forEach((t) => {
+                const item = document.createElement("li");
+                item.textContent = `Coin: ${t.coin} | Amount: ${t.amount} | Type: ${t.type} | Date: ${t.date} (Offline)`;
+                tbody.appendChild(item);
+            });
+            return;
+        }
+
         // Use fallback data
         const fallbackTransactions = [
             { id: 1, coin: 'BTC', amount: '1.5', type: 'buy', date: '2026-04-08' },
@@ -2770,8 +2597,7 @@ async function updateTotalPortfolioValue() {
 
     try {
         // Get transactions from localStorage
-        const transactions = JSON.parse(localStorage.getItem('offlineTransactions') || '[]');
-        
+        const transactions = await fetchTransactions();
         if (!Array.isArray(transactions)) {
             totalValueEl.textContent = "$0.00";
             portfolioChangeEl.textContent = "—";
@@ -2781,22 +2607,10 @@ async function updateTotalPortfolioValue() {
         // Calculate portfolio holdings
         const portfolio = {};
         transactions.forEach((t) => {
-            // Handle both offline format (object) and backend format (array)
-            let coin, amount, txType;
-            
-            if (typeof t === 'object' && t.coin) {
-                // Offline transaction format
-                coin = t.coin;
-                amount = t.amount;
-                txType = t.type;
-            } else if (Array.isArray(t)) {
-                // Backend transaction format
-                coin = t[1];
-                amount = parseFloat(t[2]);
-                txType = t[3];
-            } else {
-                return; // Skip invalid transaction
-            }
+            if (!t || !t.coin) return;
+            const coin = t.coin;
+            const amount = parseFloat(t.amount) || 0;
+            const txType = t.type;
             
             if (!portfolio[coin]) portfolio[coin] = 0;
             portfolio[coin] += txType === "buy" ? amount : -amount;
@@ -3008,4 +2822,66 @@ function initMarketChart(selectedCoin = 'BTC') {
     const ro = new ResizeObserver(resize);
     ro.observe(container.closest(".chart-container") || container);
     window.addEventListener("resize", resize);
+}
+
+// Database View Function
+async function showDatabase() {
+    const displayEl = document.getElementById("database-display");
+    if (!displayEl) return;
+
+    displayEl.innerHTML = "<p>Loading database data...</p>";
+
+    // Clear any existing auto-refresh interval
+    if (window.databaseRefreshInterval) {
+        clearInterval(window.databaseRefreshInterval);
+    }
+
+    // Function to fetch and display data
+    const fetchAndDisplay = async () => {
+        try {
+            // Fetch users
+            const usersResponse = await fetch(API + "/all_users");
+            const users = usersResponse.ok ? await usersResponse.json() : [];
+
+            // Fetch transactions
+            const transactionsResponse = await fetch(API + "/all_transactions");
+            const transactions = transactionsResponse.ok ? await transactionsResponse.json() : [];
+
+            // Display data
+            let html = "<h3>Users Table</h3>";
+            if (users.length > 0) {
+                html += "<table style='width:100%; border-collapse:collapse; margin-bottom:20px;'>";
+                html += "<tr style='background:#374151; color:#e5e7eb;'><th style='border:1px solid #4b5563; padding:8px;'>ID</th><th style='border:1px solid #4b5563; padding:8px;'>Username</th><th style='border:1px solid #4b5563; padding:8px;'>Email</th></tr>";
+                users.forEach(user => {
+                    html += `<tr><td style='border:1px solid #4b5563; padding:8px;'>${user.id}</td><td style='border:1px solid #4b5563; padding:8px;'>${user.username}</td><td style='border:1px solid #4b5563; padding:8px;'>${user.email}</td></tr>`;
+                });
+                html += "</table>";
+            } else {
+                html += "<p>No users found.</p>";
+            }
+
+            html += "<h3>Transactions Table</h3>";
+            if (transactions.length > 0) {
+                html += "<table style='width:100%; border-collapse:collapse;'>";
+                html += "<tr style='background:#374151; color:#e5e7eb;'><th style='border:1px solid #4b5563; padding:8px;'>ID</th><th style='border:1px solid #4b5563; padding:8px;'>User ID</th><th style='border:1px solid #4b5563; padding:8px;'>Coin</th><th style='border:1px solid #4b5563; padding:8px;'>Amount</th><th style='border:1px solid #4b5563; padding:8px;'>Type</th><th style='border:1px solid #4b5563; padding:8px;'>Date</th></tr>";
+                transactions.forEach(tx => {
+                    html += `<tr><td style='border:1px solid #4b5563; padding:8px;'>${tx.id}</td><td style='border:1px solid #4b5563; padding:8px;'>${tx.user_id}</td><td style='border:1px solid #4b5563; padding:8px;'>${tx.coin}</td><td style='border:1px solid #4b5563; padding:8px;'>${tx.amount}</td><td style='border:1px solid #4b5563; padding:8px;'>${tx.type}</td><td style='border:1px solid #4b5563; padding:8px;'>${tx.date}</td></tr>`;
+                });
+                html += "</table>";
+            } else {
+                html += "<p>No transactions found.</p>";
+            }
+
+            displayEl.innerHTML = html;
+        } catch (error) {
+            console.error("Error loading database:", error);
+            displayEl.innerHTML = "<p>Error loading database data. Make sure the backend is running.</p>";
+        }
+    };
+
+    // Initial load
+    await fetchAndDisplay();
+
+    // Start auto-refresh every 5 seconds
+    window.databaseRefreshInterval = setInterval(fetchAndDisplay, 5000);
 }

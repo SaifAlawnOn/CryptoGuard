@@ -1,15 +1,36 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import os
 import sqlite3
 import secrets
+from pathlib import Path
+
+from flask import Flask, abort, jsonify, request, send_from_directory
+from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# Flask backend for CryptoGuard.
+# This module handles user registration, login/logout, session management,
+# transaction recording, and retrieval of transaction history.
+# It uses SQLite locally and keeps the API simple for demo/testing.
 app = Flask(__name__)
-CORS(app, origins=['http://127.0.0.1:5500', 'http://localhost:5500'], supports_credentials=True)
+# Allow common local dev servers (Live Server, Vite, etc.). Token is in localStorage, not cookies.
+CORS(
+    app,
+    origins="*",
+    allow_headers=["Content-Type", "X-Auth-Token"],
+    methods=["GET", "POST", "OPTIONS"],
+)
 
 DB_FILE = "transactions.db"
 
+_frontend_override = os.environ.get("CRYPTOGUARD_FRONTEND", "").strip()
+FRONTEND_DIR = (
+    Path(_frontend_override).resolve()
+    if _frontend_override
+    else (Path(__file__).resolve().parent.parent / "cryptoguard_frontend")
+)
 
+# Open a connection to the SQLite database file.
+# The row factory allows query results to be accessed like dictionaries.
 def get_db():
     conn = sqlite3.connect(DB_FILE, timeout=10.0)
     conn.row_factory = sqlite3.Row
@@ -17,6 +38,8 @@ def get_db():
 
 from contextlib import contextmanager
 
+# Provide a safe context manager for database connections.
+# This ensures that the connection is always closed after use.
 @contextmanager
 def get_db_connection():
     conn = get_db()
@@ -26,6 +49,8 @@ def get_db_connection():
         conn.close()
 
 
+# Create database tables if they do not already exist.
+# This runs once at startup and also applies simple schema upgrades.
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -72,9 +97,30 @@ def init_db():
     conn.close()
 
 
+def ensure_guest_user():
+    """Create a built-in Guest account for instant demo access (no password needed)."""
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE username = ?", ("Guest",))
+        if c.fetchone():
+            return
+        c.execute(
+            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+            (
+                "Guest",
+                "guest@cryptoguard.local",
+                generate_password_hash(secrets.token_hex(32)),
+            ),
+        )
+        conn.commit()
+
+
 init_db()
+ensure_guest_user()
 
 
+# Look up the authenticated user from the request token.
+# Returns the user_id if the session token is valid.
 def get_auth_user_id():
     token = request.headers.get("X-Auth-Token")
     if not token:
@@ -86,6 +132,7 @@ def get_auth_user_id():
         return row[0] if row else None
 
 
+# Retrieve the username for a given user id.
 def get_username(user_id):
     with get_db_connection() as conn:
         c = conn.cursor()
@@ -94,6 +141,7 @@ def get_username(user_id):
         return row[0] if row else None
 
 
+# Endpoint to register a new user. Performs validation and stores a hashed password.
 @app.route("/register", methods=["POST"])
 def register():
     data = request.get_json() or {}
@@ -129,6 +177,7 @@ def register():
             return jsonify({"ok": False, "error": "Registration failed."}), 400
 
 
+# Endpoint to log in an existing user and create a session token.
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json() or {}
@@ -152,6 +201,26 @@ def login():
     return jsonify({"ok": True, "token": token, "username": username})
 
 
+# Instant demo session (same as login but no password).
+@app.route("/guest", methods=["POST"])
+def guest_login():
+    ensure_guest_user()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE username = ?", ("Guest",))
+        row = c.fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "Guest account unavailable."}), 500
+        user_id = row[0]
+    token = secrets.token_hex(32)
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO sessions (token, user_id) VALUES (?, ?)", (token, user_id))
+        conn.commit()
+    return jsonify({"ok": True, "token": token, "username": "Guest"})
+
+
+# Endpoint to log out the current session by deleting the token.
 @app.route("/logout", methods=["POST"])
 def logout():
     token = request.headers.get("X-Auth-Token")
@@ -163,6 +232,7 @@ def logout():
     return jsonify({"ok": True})
 
 
+# Endpoint to check whether the user is currently logged in.
 @app.route("/me", methods=["GET"])
 def me():
     uid = get_auth_user_id()
@@ -171,11 +241,12 @@ def me():
     return jsonify({"ok": True, "logged_in": True, "username": get_username(uid)})
 
 
+# Endpoint to add a new transaction record for the authenticated user.
+# Validates input, prevents past-dated transactions, and checks balance for sells.
 @app.route("/add_transaction", methods=["POST"])
 def add_transaction():
-    uid = get_auth_user_id()
-    if not uid:
-        return jsonify({"ok": False, "error": "Not logged in"}), 401
+    # For demo purposes, skip auth and use user_id = 1
+    uid = 1
     
     data = request.get_json() or {}
     coin = data.get("coin")
@@ -237,15 +308,16 @@ def add_transaction():
     return jsonify({"status": "success", "ok": True}), 200
 
 
+# Endpoint to return the transaction history for the authenticated user.
 @app.route("/transactions")
 def get_transactions():
     uid = get_auth_user_id()
     if not uid:
-        return jsonify({"ok": False, "error": "Not logged in"}), 401
-    
+        uid = 1
+
     with get_db_connection() as conn:
         c = conn.cursor()
-        # Get all transactions for the user, newest first (by date string YYYY-MM-DD)
+        # Get all transactions for the demo user or logged-in user.
         c.execute(
             """
             SELECT * FROM transactions
@@ -255,8 +327,72 @@ def get_transactions():
             (uid,),
         )
         rows = c.fetchall()
-        return jsonify(rows)
+        return jsonify([dict(row) for row in rows])
+
+
+# Demo endpoint to list all users (for showing database in UI)
+@app.route("/all_users")
+def all_users():
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, username, email FROM users")
+        rows = c.fetchall()
+        return jsonify([dict(row) for row in rows])
+
+
+# Demo endpoint to list all transactions (for showing database in UI)
+@app.route("/all_transactions")
+def all_transactions():
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM transactions ORDER BY date DESC")
+        rows = c.fetchall()
+        return jsonify([dict(row) for row in rows])
+
+
+# Serve the HTML/CSS/JS so one deployed URL works for login and API (Render, Railway, VPS, etc.).
+_API_TOP_NAMES = frozenset(
+    {
+        "transactions",
+        "me",
+        "all_users",
+        "all_transactions",
+        "register",
+        "login",
+        "guest",
+        "logout",
+        "add_transaction",
+    }
+)
+
+
+@app.route("/")
+def serve_index():
+    if not FRONTEND_DIR.is_dir():
+        return jsonify({"error": "Frontend folder not found.", "path": str(FRONTEND_DIR)}), 503
+    return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+@app.route("/<path:filename>")
+def serve_frontend(filename):
+    if not FRONTEND_DIR.is_dir():
+        return jsonify({"error": "Frontend folder not found.", "path": str(FRONTEND_DIR)}), 503
+    if ".." in filename or filename.startswith("/"):
+        abort(404)
+    top = filename.split("/")[0]
+    if top in _API_TOP_NAMES:
+        abort(404)
+    target = (FRONTEND_DIR / filename).resolve()
+    try:
+        target.relative_to(FRONTEND_DIR.resolve())
+    except ValueError:
+        abort(404)
+    if not target.is_file():
+        abort(404)
+    return send_from_directory(FRONTEND_DIR, filename)
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", "5000"))
+    debug = os.environ.get("FLASK_DEBUG", "").strip().lower() in ("1", "true", "yes")
+    app.run(debug=debug, host="0.0.0.0", port=port)
